@@ -7,9 +7,9 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     prelude::*,
-    symbols,
+    text::Line,
     widgets::Sparkline,
-    widgets::{Block, Borders, Gauge, LineGauge, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
 };
 
 pub struct UiSnapshot<'a> {
@@ -88,9 +88,9 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
     let cpu_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(48),
-            Constraint::Length(2),
-            Constraint::Percentage(48),
+            Constraint::Percentage(47),
+            Constraint::Length(4),
+            Constraint::Percentage(47),
         ])
         .split(sections[0]);
 
@@ -102,33 +102,27 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         "P-CPU Usage: {}% @ {} MHz",
         data.cpu.p_cluster_active, data.cpu.p_cluster_freq_mhz
     );
-    let e_gauge = LineGauge::default()
-        .block(
-            Block::default()
-                .title(e_title)
-                .title_alignment(Alignment::Center),
-        )
-        .line_set(symbols::line::THICK)
-        .style(Style::default().fg(data.color))
-        .ratio((data.cpu.e_cluster_active as f64 / 100.0).clamp(0.0, 1.0));
-    let p_gauge = LineGauge::default()
-        .block(
-            Block::default()
-                .title(p_title)
-                .title_alignment(Alignment::Center),
-        )
-        .line_set(symbols::line::THICK)
-        .style(Style::default().fg(data.color))
-        .ratio((data.cpu.p_cluster_active as f64 / 100.0).clamp(0.0, 1.0));
-    frame.render_widget(e_gauge, cpu_chunks[0]);
-    frame.render_widget(p_gauge, cpu_chunks[2]);
+    render_usage_block(
+        frame,
+        cpu_chunks[0],
+        e_title,
+        data.cpu.e_cluster_active,
+        data.color,
+    );
+    render_usage_block(
+        frame,
+        cpu_chunks[2],
+        p_title,
+        data.cpu.p_cluster_active,
+        data.color,
+    );
 
     let gpu_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(48),
-            Constraint::Length(2),
-            Constraint::Percentage(48),
+            Constraint::Percentage(47),
+            Constraint::Length(4),
+            Constraint::Percentage(47),
         ])
         .split(sections[1]);
 
@@ -136,31 +130,25 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         "GPU Usage: {}% @ {} MHz",
         data.gpu.active_pct, data.gpu.freq_mhz
     );
-    let gpu_gauge = LineGauge::default()
-        .block(
-            Block::default()
-                .title(gpu_title)
-                .title_alignment(Alignment::Center),
-        )
-        .line_set(symbols::line::THICK)
-        .style(Style::default().fg(data.color))
-        .ratio((data.gpu.active_pct as f64 / 100.0).clamp(0.0, 1.0));
-    frame.render_widget(gpu_gauge, gpu_chunks[0]);
+    render_usage_block(
+        frame,
+        gpu_chunks[0],
+        gpu_title,
+        data.gpu.active_pct,
+        data.color,
+    );
 
     let ane_title = format!(
         "ANE Usage: {}% @ {:.1} W",
         data.ane_percent, data.ane_power_w
     );
-    let ane_gauge = LineGauge::default()
-        .block(
-            Block::default()
-                .title(ane_title)
-                .title_alignment(Alignment::Center),
-        )
-        .line_set(symbols::line::THICK)
-        .style(Style::default().fg(data.color))
-        .ratio((data.ane_percent as f64 / 100.0).clamp(0.0, 1.0));
-    frame.render_widget(ane_gauge, gpu_chunks[2]);
+    render_usage_block(
+        frame,
+        gpu_chunks[2],
+        ane_title,
+        data.ane_percent,
+        data.color,
+    );
 
     if data.show_cores && rows == 3 {
         let e_core_text = format_core_rows("E", &data.cpu.e_cores);
@@ -288,4 +276,30 @@ fn format_core_rows(prefix: &str, cores: &[CoreMetrics]) -> String {
         rows.push(row);
     }
     rows.join("\n")
+}
+
+fn render_usage_block(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: String,
+    percent: u64,
+    color: Color,
+) {
+    let bar_width = area.width.saturating_sub(2);
+    let bar = block_bar(percent, bar_width);
+    let lines = vec![Line::from(title), Line::from(bar)];
+    let paragraph = Paragraph::new(lines)
+        .style(Style::default().fg(color))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+fn block_bar(percent: u64, width: u16) -> String {
+    let width = width.max(10) as usize;
+    let clamped = percent.min(100) as usize;
+    let filled = (clamped * width + 99) / 100;
+    let empty = width.saturating_sub(filled);
+    let filled_block = "█".repeat(filled);
+    let empty_block = "░".repeat(empty);
+    format!("{filled_block}{empty_block}")
 }
