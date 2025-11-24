@@ -1,4 +1,5 @@
 mod config;
+mod io_stats;
 mod memory;
 mod powermetrics;
 mod soc;
@@ -14,6 +15,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use io_stats::{IoSampler, IoStats};
 use memory::{MemoryReader, MemoryStats};
 use powermetrics::{
     CpuMetrics, GpuMetrics, History, PowermetricsReading, RollingAverage,
@@ -39,6 +41,7 @@ fn main() -> Result<()> {
 
     let soc = SocInfo::detect();
     let mut memory_reader = MemoryReader::new();
+    let mut io_sampler = IoSampler::new();
     cleanup_powermetrics_files().ok();
 
     println!("[2/3] Starting powermetrics process\n");
@@ -51,10 +54,16 @@ fn main() -> Result<()> {
         .context("powermetrics never produced a reading")?;
 
     let mut state = AppState::new(cli.clone(), soc, &mut memory_reader);
-    state.apply_reading(first_reading);
+    state.apply_reading(first_reading, &mut io_sampler);
     state.memory_stats = memory_reader.read();
 
-    let result = run_ui(&mut state, &mut child, &mut timecode, &mut memory_reader);
+    let result = run_ui(
+        &mut state,
+        &mut child,
+        &mut timecode,
+        &mut memory_reader,
+        &mut io_sampler,
+    );
 
     if let Err(err) = cleanup_terminal() {
         eprintln!("failed to restore terminal: {err}");
@@ -95,6 +104,7 @@ fn run_ui(
     child: &mut Child,
     timecode: &mut String,
     memory_reader: &mut MemoryReader,
+    io_sampler: &mut IoSampler,
 ) -> Result<()> {
     let mut terminal = setup_terminal()?;
     let mut last_draw = Instant::now();
@@ -122,7 +132,7 @@ fn run_ui(
 
         if last_sample.elapsed() >= Duration::from_millis(100) {
             if let Some(reading) = parse_powermetrics(timecode)? {
-                if state.update_if_new(reading, memory_reader) {
+                if state.update_if_new(reading, memory_reader, io_sampler) {
                     last_sample = Instant::now();
                 }
             }
@@ -174,6 +184,7 @@ struct AppState {
     memory_stats: MemoryStats,
     cpu_metrics: CpuMetrics,
     gpu_metrics: GpuMetrics,
+    io_stats: IoStats,
     thermal_pressure: String,
     thermal_level: Option<ThermalLevel>,
     last_timestamp: Option<std::time::SystemTime>,
@@ -208,6 +219,7 @@ impl AppState {
             memory_stats,
             cpu_metrics: CpuMetrics::default(),
             gpu_metrics: GpuMetrics::default(),
+            io_stats: IoStats::default(),
             thermal_pressure: String::new(),
             thermal_level: None,
             last_timestamp: None,
@@ -228,13 +240,14 @@ impl AppState {
         }
     }
 
-    fn apply_reading(&mut self, reading: PowermetricsReading) {
+    fn apply_reading(&mut self, reading: PowermetricsReading, io_sampler: &mut IoSampler) {
         self.last_timestamp = Some(reading.timestamp);
         self.thermal_pressure = reading.thermal_pressure;
         self.cpu_metrics = reading.cpu;
         self.gpu_metrics = reading.gpu;
         self.refresh_thermal_level();
         self.update_power_stats();
+        self.refresh_io(io_sampler);
         self.samples_taken += 1;
     }
 
@@ -242,6 +255,7 @@ impl AppState {
         &mut self,
         reading: PowermetricsReading,
         memory_reader: &mut MemoryReader,
+        io_sampler: &mut IoSampler,
     ) -> bool {
         if let Some(last) = self.last_timestamp {
             if reading.timestamp <= last {
@@ -255,8 +269,13 @@ impl AppState {
         self.memory_stats = memory_reader.read();
         self.refresh_thermal_level();
         self.update_power_stats();
+        self.refresh_io(io_sampler);
         self.samples_taken += 1;
         true
+    }
+
+    fn refresh_io(&mut self, sampler: &mut IoSampler) {
+        self.io_stats = sampler.sample();
     }
 
     fn update_power_stats(&mut self) {
@@ -287,6 +306,7 @@ impl AppState {
             cpu: &self.cpu_metrics,
             gpu: &self.gpu_metrics,
             memory: &self.memory_stats,
+            io: self.io_stats,
             thermal_throttle,
             color: self.color,
             show_cores: self.config.show_cores,
@@ -304,6 +324,7 @@ impl AppState {
                 } else {
                     0.0
                 },
+                tdp_limit: self.soc.cpu_max_power,
             },
             gpu_power: PowerSnapshot {
                 current: self.gpu_power,
@@ -314,12 +335,14 @@ impl AppState {
                 } else {
                     0.0
                 },
+                tdp_limit: self.soc.gpu_max_power,
             },
             package_power: PowerSnapshot {
                 current: self.package_power,
                 average: self.package_avg.average(),
                 peak: self.package_peak,
                 percent_of_tdp: 0.0,
+                tdp_limit: 0.0,
             },
             cpu_history: self.cpu_history.values(),
             gpu_history: self.gpu_history.values(),

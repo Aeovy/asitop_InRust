@@ -1,13 +1,14 @@
 use crate::{
+    io_stats::IoStats,
     memory::MemoryStats,
     powermetrics::{CoreMetrics, CpuMetrics, GpuMetrics},
     soc::SocInfo,
 };
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     prelude::*,
-    text::Line,
+    text::{Line, Span},
     widgets::Sparkline,
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
 };
@@ -17,6 +18,7 @@ pub struct UiSnapshot<'a> {
     pub cpu: &'a CpuMetrics,
     pub gpu: &'a GpuMetrics,
     pub memory: &'a MemoryStats,
+    pub io: IoStats,
     pub thermal_throttle: bool,
     pub color: Color,
     pub show_cores: bool,
@@ -38,6 +40,7 @@ pub struct PowerSnapshot {
     pub average: f64,
     pub peak: f64,
     pub percent_of_tdp: f64,
+    pub tdp_limit: f64,
 }
 
 pub fn draw(frame: &mut Frame<'_>, data: &UiSnapshot<'_>) {
@@ -46,13 +49,15 @@ pub fn draw(frame: &mut Frame<'_>, data: &UiSnapshot<'_>) {
         .constraints([
             Constraint::Percentage(40),
             Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Min(10),
         ])
         .split(frame.size());
 
     draw_processor(frame, chunks[0], data);
     draw_memory(frame, chunks[1], data);
-    draw_power(frame, chunks[2], data);
+    draw_io(frame, chunks[2], data);
+    draw_power(frame, chunks[3], data);
 }
 
 fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
@@ -70,16 +75,10 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         horizontal: 1,
         vertical: 1,
     });
-    let rows = if data.show_cores { 3 } else { 2 };
-    let constraints = if data.show_cores {
-        vec![
-            Constraint::Length(5),
-            Constraint::Length(5),
-            Constraint::Min(0),
-        ]
-    } else {
-        vec![Constraint::Length(5), Constraint::Length(5)]
-    };
+    let mut constraints = vec![Constraint::Length(5), Constraint::Length(5)];
+    if data.show_cores {
+        constraints.push(Constraint::Min(0));
+    }
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
@@ -150,7 +149,7 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         data.color,
     );
 
-    if data.show_cores && rows == 3 {
+    if data.show_cores {
         let e_core_text = format_core_rows("E", &data.cpu.e_cores);
         let p_core_text = format_core_rows("P", &data.cpu.p_cores);
         let paragraph = Paragraph::new(format!("{e_core_text}\n{p_core_text}"))
@@ -186,6 +185,42 @@ fn draw_memory(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         .gauge_style(Style::default().fg(data.color))
         .percent(data.memory.free_percent as u16);
     frame.render_widget(gauge, inner);
+}
+
+fn draw_io(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
+    let block = Block::default()
+        .title("I/O")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(data.color));
+    frame.render_widget(block, area);
+    let inner = area.inner(&Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+    render_io_panel(
+        frame,
+        columns[0],
+        "Network I/O",
+        "In",
+        format_rate(data.io.net_in_mbps),
+        "Out",
+        format_rate(data.io.net_out_mbps),
+        data.color,
+    );
+    render_io_panel(
+        frame,
+        columns[1],
+        "Disk I/O",
+        "Read",
+        format_rate(data.io.disk_read_mbps),
+        "Write",
+        format_rate(data.io.disk_write_mbps),
+        data.color,
+    );
 }
 
 fn draw_power(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
@@ -239,20 +274,43 @@ fn render_power_chart(
         "{label}: {:.2}W ({:.0}% TDP) avg {:.2}W peak {:.2}W",
         snapshot.current, snapshot.percent_of_tdp, snapshot.average, snapshot.peak
     );
-    let mut values: Vec<u64> = history
-        .iter()
-        .map(|v| (*v * 10.0).round().max(0.0) as u64)
-        .collect();
+    let use_fixed_scale = snapshot.tdp_limit > 0.0;
+    let mut values: Vec<u64> = if use_fixed_scale {
+        normalize_history(history, snapshot.tdp_limit)
+    } else {
+        history
+            .iter()
+            .map(|v| (*v * 10.0).round().max(0.0) as u64)
+            .collect()
+    };
     if values.is_empty() {
         values.push(0);
     }
-    let max_value = values.iter().copied().max().unwrap_or(1).max(1);
+    let max_value = if use_fixed_scale {
+        100
+    } else {
+        values.iter().copied().max().unwrap_or(1).max(1)
+    };
     let spark = Sparkline::default()
         .block(Block::default().title(title))
         .style(Style::default().fg(color))
         .max(max_value)
         .data(&values);
     frame.render_widget(spark, area);
+}
+
+fn normalize_history(history: &[f64], limit: f64) -> Vec<u64> {
+    let scale = 100.0;
+    history
+        .iter()
+        .map(|v| {
+            if limit <= 0.0 {
+                0
+            } else {
+                ((*v / limit) * scale).clamp(0.0, scale).round() as u64
+            }
+        })
+        .collect()
 }
 
 fn format_core_rows(prefix: &str, cores: &[CoreMetrics]) -> String {
@@ -302,4 +360,54 @@ fn block_bar(percent: u64, width: u16) -> String {
     let filled_block = "█".repeat(filled);
     let empty_block = "░".repeat(empty);
     format!("{filled_block}{empty_block}")
+}
+
+fn render_io_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    first_label: &str,
+    first_value: String,
+    second_label: &str,
+    second_value: String,
+    color: Color,
+) {
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{first_label:<5}"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(first_value, Style::default().fg(color)),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{second_label:<5}"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(second_value, Style::default().fg(color)),
+        ]),
+    ];
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::NONE)
+                .title_alignment(Alignment::Left),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+fn format_rate(mbps: f64) -> String {
+    let value = mbps.max(0.0);
+    if value >= 1024.0 {
+        format!("{:.2} GB/s", value / 1024.0)
+    } else if value >= 1.0 {
+        format!("{:.2} MB/s", value)
+    } else if value >= 0.01 {
+        format!("{:.1} KB/s", value * 1024.0)
+    } else {
+        format!("{:.0} B/s", (value * 1024.0 * 1024.0).round())
+    }
 }

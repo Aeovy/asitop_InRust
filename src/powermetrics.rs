@@ -3,13 +3,14 @@ use plist::{self, Date};
 use serde::Deserialize;
 use std::{
     collections::VecDeque,
-    fs,
-    io::Cursor,
+    fs::{self, File},
+    io::{Cursor, Read, Seek, SeekFrom},
     process::{Child, Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const POWER_FILE_PREFIX: &str = "/tmp/asitop_powermetrics";
+const MAX_READ_BYTES: u64 = 1 * 1024 * 1024; // 1 MiB from EOF is enough for one sample
 
 #[derive(Debug, Clone)]
 pub struct PowermetricsReading {
@@ -150,10 +151,16 @@ pub fn new_timecode() -> String {
 
 pub fn parse_powermetrics(timecode: &str) -> Result<Option<PowermetricsReading>> {
     let path = powermetrics_path(timecode);
-    let data = match fs::read(&path) {
-        Ok(bytes) => bytes,
+    let mut file = match File::open(&path) {
+        Ok(f) => f,
         Err(_) => return Ok(None),
     };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(MAX_READ_BYTES);
+    file.seek(SeekFrom::Start(start)).ok();
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .with_context(|| "failed to read powermetrics chunk")?;
     let chunks: Vec<&[u8]> = data
         .split(|b| *b == 0)
         .filter(|chunk| !chunk.is_empty())

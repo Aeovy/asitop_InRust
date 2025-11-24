@@ -60,17 +60,21 @@ impl MemoryReader {
         let page_size = self.page_size.max(4096);
         let active = stats.active_count as u64 * page_size;
         let wired = stats.wire_count as u64 * page_size;
+        let compressed = stats.compressor_page_count as u64 * page_size;
         let inactive = stats.inactive_count as u64 * page_size;
         let mut free = stats.free_count as u64 * page_size;
         let speculative = stats.speculative_count as u64 * page_size;
         free = free.saturating_sub(speculative);
         let available = inactive.saturating_add(free);
-        let used = active.saturating_add(wired);
         let total = if self.total_bytes > 0 {
             self.total_bytes
         } else {
-            available.saturating_add(used)
+            available
+                .saturating_add(active)
+                .saturating_add(wired)
+                .saturating_add(compressed)
         };
+        let used = total.saturating_sub(available);
         let used_percent = if total > 0 {
             ((total.saturating_sub(available)) as f64 / total as f64 * 100.0)
                 .clamp(0.0, 100.0)
