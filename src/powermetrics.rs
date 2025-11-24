@@ -266,18 +266,26 @@ fn ratio_to_pct(idle_ratio: f64) -> u64 {
 }
 
 fn aggregate_cluster(clusters: &[ClusterData], cores: &[CoreMetrics], prefix: char) -> (u64, u64) {
+    let core_avg = core_average(cores);
+    let core_freq = core_max_freq(cores);
+    let (cluster_active, cluster_freq) = cluster_stats(clusters, prefix);
+
+    let active = if core_avg > 0 {
+        core_avg
+    } else {
+        cluster_active.unwrap_or(0)
+    };
+
+    let freq = cluster_freq.unwrap_or(core_freq);
+
+    (active, freq)
+}
+
+fn cluster_stats(clusters: &[ClusterData], prefix: char) -> (Option<u64>, Option<u64>) {
     let primary_label = format!("{prefix}-Cluster");
     if let Some(primary) = clusters.iter().find(|c| c.name == primary_label) {
-        let active = if primary.active_pct > 0 {
-            primary.active_pct
-        } else {
-            core_average(cores)
-        };
-        let freq = if primary.freq_mhz > 0 {
-            primary.freq_mhz
-        } else {
-            core_max_freq(cores)
-        };
+        let active = (primary.active_pct > 0).then_some(primary.active_pct);
+        let freq = (primary.freq_mhz > 0).then_some(primary.freq_mhz);
         return (active, freq);
     }
 
@@ -288,20 +296,12 @@ fn aggregate_cluster(clusters: &[ClusterData], cores: &[CoreMetrics], prefix: ch
     if !matching.is_empty() {
         let active_sum: u64 = matching.iter().map(|c| c.active_pct).sum();
         let freq_max = matching.iter().map(|c| c.freq_mhz).max().unwrap_or(0);
-        let avg_active = if active_sum > 0 {
-            active_sum / matching.len() as u64
-        } else {
-            core_average(cores)
-        };
-        let freq = if freq_max > 0 {
-            freq_max
-        } else {
-            core_max_freq(cores)
-        };
-        return (avg_active, freq);
+        let active = (active_sum > 0).then_some(active_sum / matching.len() as u64);
+        let freq = (freq_max > 0).then_some(freq_max);
+        return (active, freq);
     }
 
-    (core_average(cores), core_max_freq(cores))
+    (None, None)
 }
 
 fn core_average(cores: &[CoreMetrics]) -> u64 {

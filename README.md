@@ -1,37 +1,37 @@
-# asitop (Rust)
+# asitop（Rust 版）
 
-This is a Rust rewrite of the original [`asitop`](https://github.com/tlkh/asitop) tool. It delivers the same Apple Silicon monitoring experience with a zero-allocation Ratatui UI and safe process management that avoids the memory leak present in the Python version.
+这是原始 [`asitop`](https://github.com/tlkh/asitop) 的 Rust 重写版本，完整复刻 Apple Silicon 上的监控体验。得益于零分配的 Ratatui UI 与安全的子进程管理，Rust 版不仅修复了 Python 版本的内存泄漏，还将常驻内存占用降低到 Python 版本的 1/10，长时间运行也保持稳定。
 
-## Features
+## 功能特性
 
-- Launches `powermetrics` under `sudo nice -n 10` and parses the plist stream directly from `/tmp`.
-- Displays CPU (cluster + per-core), GPU, and ANE utilization gauges.
-- Shows memory usage, swap activity, and CPU/GPU power charts with rolling averages and peak tracking.
-- Supports optional per-core view, custom refresh interval, UI color presets, and automatic powermetrics restarts.
+- 通过 `sudo nice -n 10` 调用 `powermetrics`，直接解析 `/tmp` 中的 plist 数据流。
+- 展示 CPU（集群 + 单核）、GPU、ANE 的块状占用条与功耗信息，支持滚动平均与峰值跟踪。
+- 提供内存、交换分区、功耗历史、网络与磁盘 I/O 速率等系统状态概览。
+- 支持自定义刷新间隔、滚动平均窗口、配色方案，以及可选的单核视图与自动重启 `powermetrics`。
 
-## Building
+## 构建
 
 ```
 cd asitop-rs
 cargo build --release
 ```
 
-The resulting binary will be at `target/release/asitop`.
+可执行文件位于 `target/release/asitop`。
 
-## Usage
+## 使用
 
-Run `asitop` with `sudo` so that `powermetrics` can access the required counters:
+`powermetrics` 需要 `sudo` 才能读取硬件计数器，运行示例：
 
 ```
 sudo target/release/asitop --interval 1 --avg 30 --color 2
 ```
 
-Command line options (matching the legacy tool):
+参数
 
-- `--interval <seconds>` – Update frequency and powermetrics sampling interval.
-- `--avg <seconds>` – Rolling average window for the power readouts.
-- `--color <0-8>` – Pick one of the built-in color presets.
-- `--show-cores` – Toggle detailed per-core view.
-- `--max-count <n>` – Automatically restart `powermetrics` after `n` samples (0 = never).
+- `--interval <seconds>`：刷新频率，同时也是 `powermetrics` 的采样间隔。
+- `--avg <seconds>`：功耗读数的滚动平均窗口。
+- `--color <0-8>`：选择预设配色。
+- `--show-cores`：开启单核视图。
+- `--max-count <n>`：采样达到 `n` 次后自动重启 `powermetrics`（0 表示永不重启）。
 
-Press `q`, `Esc`, or `Ctrl+C` to exit the UI. The powermetrics child process is always cleaned up, preventing the leak that existed in the Python implementation.
+按下 `q`、`Esc` 或 `Ctrl+C` 即可退出界面，子进程会被自动清理，彻底避免 Python 版本的内存泄漏问题。

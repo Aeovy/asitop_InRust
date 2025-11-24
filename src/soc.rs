@@ -35,14 +35,22 @@ impl SocInfo {
 }
 
 fn lookup_caps(name: &str) -> (f64, f64) {
-    match name {
-        "Apple M1 Max" => (30.0, 60.0),
-        "Apple M1 Pro" => (30.0, 30.0),
-        "Apple M1" => (20.0, 20.0),
-        "Apple M1 Ultra" => (60.0, 120.0),
-        "Apple M2" => (25.0, 15.0),
-        _ => (20.0, 20.0),
+    if name.ends_with("Pro") 
+    {
+        (40.0, 40.0)
+    } 
+    else if name.ends_with("Max") 
+    {
+        (90.0, 90.0)
     }
+    else if name.ends_with("Ultra")
+    {
+        (140.0, 140.0)
+    } 
+    else
+    {
+        (20.0, 20.0)
+    }   
 }
 
 fn read_sysctl(key: &str) -> Option<String> {
