@@ -8,10 +8,16 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     prelude::*,
+    style::Modifier,
     text::{Line, Span},
     widgets::Sparkline,
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
 };
+
+const CORE_MAX_COLUMNS: usize = 4;
+const CORE_FIXED_WIDTH: usize = 18;
+const CORE_MIN_BAR_WIDTH: usize = 6;
+const CORE_MIN_ENTRY_WIDTH: usize = CORE_FIXED_WIDTH + CORE_MIN_BAR_WIDTH;
 
 pub struct UiSnapshot<'a> {
     pub soc: &'a SocInfo,
@@ -75,7 +81,7 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         horizontal: 1,
         vertical: 1,
     });
-    let mut constraints = vec![Constraint::Length(5), Constraint::Length(5)];
+    let mut constraints = vec![Constraint::Length(2), Constraint::Length(2)];
     if data.show_cores {
         constraints.push(Constraint::Min(0));
     }
@@ -87,9 +93,9 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
     let cpu_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(47),
-            Constraint::Length(4),
-            Constraint::Percentage(47),
+            Constraint::Percentage(49),
+            Constraint::Length(2),
+            Constraint::Percentage(49),
         ])
         .split(sections[0]);
 
@@ -119,9 +125,9 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
     let gpu_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(47),
-            Constraint::Length(4),
-            Constraint::Percentage(47),
+            Constraint::Percentage(49),
+            Constraint::Length(2),
+            Constraint::Percentage(49),
         ])
         .split(sections[1]);
 
@@ -150,12 +156,7 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
     );
 
     if data.show_cores {
-        let e_core_text = format_core_rows("E", &data.cpu.e_cores);
-        let p_core_text = format_core_rows("P", &data.cpu.p_cores);
-        let paragraph = Paragraph::new(format!("{e_core_text}\n{p_core_text}"))
-            .style(Style::default().fg(Color::Gray))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, sections[2]);
+        render_core_sections(frame, sections[2], data);
     }
 }
 
@@ -313,27 +314,168 @@ fn normalize_history(history: &[f64], limit: f64) -> Vec<u64> {
         .collect()
 }
 
-fn format_core_rows(prefix: &str, cores: &[CoreMetrics]) -> String {
+fn render_core_sections(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    render_core_panel(
+        frame,
+        columns[0],
+        "E-Cores",
+        "E",
+        &data.cpu.e_cores,
+        data.color,
+    );
+    render_core_panel(
+        frame,
+        columns[1],
+        "P-Cores",
+        "P",
+        &data.cpu.p_cores,
+        data.color,
+    );
+}
+
+fn render_core_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    prefix: &str,
+    cores: &[CoreMetrics],
+    accent: Color,
+) {
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(accent));
+    frame.render_widget(block, area);
+    let inner = area.inner(&Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let columns = core_columns(inner.width, cores.len());
+    let entry_width = if columns == 0 {
+        inner.width as usize
+    } else {
+        (inner.width as usize).max(1) / columns
+    };
+    let available = entry_width.saturating_sub(CORE_FIXED_WIDTH);
+    let bar_width = available.max(1);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
     if cores.is_empty() {
-        return format!("No {prefix}-cores detected");
+        lines.push(Line::from(vec![Span::styled(
+            "未检测到核心",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    } else {
+        for chunk in cores.chunks(columns.max(1)) {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for core in chunk {
+                spans.extend(core_entry_spans(
+                    prefix,
+                    core,
+                    bar_width,
+                    accent,
+                    entry_width,
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
     }
-    let mut rows = Vec::new();
-    for chunk in cores.chunks(4) {
-        let row = chunk
-            .iter()
-            .map(|core| {
-                format!(
-                    "{prefix}{:02}: {:3}% @ {:>4}MHz",
-                    core.id + 1,
-                    core.active_pct,
-                    core.freq_mhz
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
-        rows.push(row);
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+fn core_columns(width: u16, count: usize) -> usize {
+    if count == 0 {
+        return 1;
     }
-    rows.join("\n")
+    let width = width as usize;
+    let mut columns = width / CORE_MIN_ENTRY_WIDTH;
+    if columns == 0 {
+        columns = 1;
+    }
+    columns = columns.min(CORE_MAX_COLUMNS);
+    columns.min(count)
+}
+
+fn core_entry_spans(
+    prefix: &str,
+    core: &CoreMetrics,
+    bar_width: usize,
+    accent: Color,
+    entry_width: usize,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut consumed = 0;
+    let label = format!("{prefix}{:02}", core.id + 1);
+    let label_text = format!("{label} ");
+    consumed += label_text.chars().count();
+    spans.push(Span::styled(
+        label_text,
+        Style::default().fg(accent).add_modifier(Modifier::BOLD),
+    ));
+
+    let clamped = core.active_pct.min(100) as usize;
+    let filled = ((clamped * bar_width) + 99) / 100;
+    let empty = bar_width.saturating_sub(filled);
+    if filled > 0 {
+        let block = "█".repeat(filled);
+        consumed += block.chars().count();
+        spans.push(Span::styled(
+            block,
+            Style::default().fg(core_usage_color(core.active_pct)),
+        ));
+    }
+    if empty > 0 {
+        let pad = "░".repeat(empty);
+        consumed += pad.chars().count();
+        spans.push(Span::styled(pad, Style::default().fg(Color::DarkGray)));
+    }
+
+    spans.push(Span::raw(" "));
+    consumed += 1;
+    let percent_text = format!("{:>3}%", core.active_pct.min(999));
+    consumed += percent_text.chars().count();
+    spans.push(Span::styled(
+        percent_text,
+        Style::default()
+            .fg(core_usage_color(core.active_pct))
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" "));
+    consumed += 1;
+    let freq_text = format!("{:>4}MHz", core.freq_mhz);
+    consumed += freq_text.chars().count();
+    spans.push(Span::styled(
+        freq_text,
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    if consumed < entry_width {
+        spans.push(Span::raw(" ".repeat(entry_width - consumed)));
+    }
+
+    spans
+}
+
+fn core_usage_color(percent: u64) -> Color {
+    match percent {
+        90..=u64::MAX => Color::Red,
+        70..=89 => Color::LightRed,
+        50..=69 => Color::Yellow,
+        30..=49 => Color::LightGreen,
+        _ => Color::Cyan,
+    }
 }
 
 fn render_usage_block(

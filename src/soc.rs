@@ -35,22 +35,15 @@ impl SocInfo {
 }
 
 fn lookup_caps(name: &str) -> (f64, f64) {
-    if name.ends_with("Pro") 
-    {
+    if name.ends_with("Pro") {
         (40.0, 40.0)
-    } 
-    else if name.ends_with("Max") 
-    {
+    } else if name.ends_with("Max") {
         (90.0, 90.0)
-    }
-    else if name.ends_with("Ultra")
-    {
+    } else if name.ends_with("Ultra") {
         (140.0, 140.0)
-    } 
-    else
-    {
+    } else {
         (20.0, 20.0)
-    }   
+    }
 }
 
 fn read_sysctl(key: &str) -> Option<String> {
