@@ -10,8 +10,7 @@ use ratatui::{
     prelude::*,
     style::Modifier,
     text::{Line, Span},
-    widgets::Sparkline,
-    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, Paragraph, RenderDirection, Sparkline, Wrap},
 };
 
 const CORE_MAX_COLUMNS: usize = 4;
@@ -36,8 +35,7 @@ pub struct UiSnapshot<'a> {
     pub cpu_power: PowerSnapshot,
     pub gpu_power: PowerSnapshot,
     pub package_power: PowerSnapshot,
-    pub cpu_history: Vec<f64>,
-    pub gpu_history: Vec<f64>,
+    pub power_history: Vec<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -46,7 +44,6 @@ pub struct PowerSnapshot {
     pub average: f64,
     pub peak: f64,
     pub percent_of_tdp: f64,
-    pub tdp_limit: f64,
 }
 
 pub fn draw(frame: &mut Frame<'_>, data: &UiSnapshot<'_>) {
@@ -240,75 +237,77 @@ fn draw_power(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         horizontal: 1,
         vertical: 1,
     });
-    let charts = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    let segments = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(inner);
 
-    render_power_chart(
-        frame,
-        charts[0],
-        data.color,
-        "CPU",
-        data.cpu_power,
-        &data.cpu_history,
+    render_power_summary(frame, segments[0], data);
+    render_power_history(frame, segments[1], data);
+}
+fn render_power_summary(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
+    let cpu_line = format!(
+        "CPU: {:.2}W ({:.0}% TDP) avg {:.2}W peak {:.2}W",
+        data.cpu_power.current,
+        data.cpu_power.percent_of_tdp,
+        data.cpu_power.average,
+        data.cpu_power.peak
     );
-    render_power_chart(
-        frame,
-        charts[1],
-        data.color,
-        "GPU",
-        data.gpu_power,
-        &data.gpu_history,
+    let gpu_line = format!(
+        "GPU: {:.2}W ({:.0}% TDP) avg {:.2}W peak {:.2}W",
+        data.gpu_power.current,
+        data.gpu_power.percent_of_tdp,
+        data.gpu_power.average,
+        data.gpu_power.peak
     );
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(area);
+    let cpu_paragraph = Paragraph::new(Line::from(cpu_line))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+    let gpu_paragraph = Paragraph::new(Line::from(gpu_line))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+    frame.render_widget(cpu_paragraph, columns[0]);
+    frame.render_widget(gpu_paragraph, columns[1]);
 }
 
-fn render_power_chart(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    color: Color,
-    label: &str,
-    snapshot: PowerSnapshot,
-    history: &[f64],
-) {
-    let title = format!(
-        "{label}: {:.2}W ({:.0}% TDP) avg {:.2}W peak {:.2}W",
-        snapshot.current, snapshot.percent_of_tdp, snapshot.average, snapshot.peak
-    );
-    let use_fixed_scale = snapshot.tdp_limit > 0.0;
-    let mut values: Vec<u64> = if use_fixed_scale {
-        normalize_history(history, snapshot.tdp_limit)
-    } else {
-        history
-            .iter()
-            .map(|v| (*v * 10.0).round().max(0.0) as u64)
-            .collect()
-    };
+fn render_power_history(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
+    let peak_limit = data.package_power.peak.max(0.1);
+    let mut values = combined_history_values(&data.power_history, peak_limit);
+    if area.width > 0 {
+        let max_points = area.width as usize;
+        if values.len() > max_points {
+            let start = values.len() - max_points;
+            values = values[start..].to_vec();
+        } else if values.len() < max_points {
+            let mut padded = vec![0; max_points - values.len()];
+            padded.extend(values);
+            values = padded;
+        }
+    }
     if values.is_empty() {
         values.push(0);
     }
-    let max_value = if use_fixed_scale {
-        100
-    } else {
-        values.iter().copied().max().unwrap_or(1).max(1)
-    };
+    let max_value = values.iter().copied().max().unwrap_or(100).max(100);
     let spark = Sparkline::default()
-        .block(Block::default().title(title))
-        .style(Style::default().fg(color))
+        .style(Style::default().fg(data.color))
+        .direction(RenderDirection::LeftToRight)
         .max(max_value)
         .data(&values);
     frame.render_widget(spark, area);
 }
 
-fn normalize_history(history: &[f64], limit: f64) -> Vec<u64> {
-    let scale = 100.0;
+fn combined_history_values(history: &[f64], peak_limit: f64) -> Vec<u64> {
     history
         .iter()
-        .map(|v| {
-            if limit <= 0.0 {
-                0
+        .map(|value| {
+            if peak_limit <= 0.0 {
+                (*value * 10.0).max(0.0).round() as u64
             } else {
-                ((*v / limit) * scale).clamp(0.0, scale).round() as u64
+                ((*value / peak_limit) * 100.0).round() as u64
             }
         })
         .collect()

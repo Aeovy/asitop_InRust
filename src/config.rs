@@ -9,7 +9,7 @@ use clap::Parser;
 )]
 pub struct Cli {
     /// Display interval in seconds. This is also passed to powermetrics.
-    #[arg(long, default_value_t = 1, value_name = "SECONDS")]
+    #[arg(long, default_value_t = 2, value_name = "SECONDS")]
     pub interval: u64,
 
     /// UI color (0-8) to match the classic asitop palette.

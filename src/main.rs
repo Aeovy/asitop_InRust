@@ -188,8 +188,7 @@ struct AppState {
     thermal_pressure: String,
     thermal_level: Option<ThermalLevel>,
     last_timestamp: Option<std::time::SystemTime>,
-    cpu_history: History,
-    gpu_history: History,
+    power_history: History,
     cpu_avg: RollingAverage,
     gpu_avg: RollingAverage,
     package_avg: RollingAverage,
@@ -223,8 +222,7 @@ impl AppState {
             thermal_pressure: String::new(),
             thermal_level: None,
             last_timestamp: None,
-            cpu_history: History::new(120),
-            gpu_history: History::new(120),
+            power_history: History::new(120),
             cpu_avg: RollingAverage::new(avg_window),
             gpu_avg: RollingAverage::new(avg_window),
             package_avg: RollingAverage::new(avg_window),
@@ -292,8 +290,7 @@ impl AppState {
         self.cpu_avg.push(self.cpu_power);
         self.gpu_avg.push(self.gpu_power);
         self.package_avg.push(self.package_power);
-        self.cpu_history.push(self.cpu_power);
-        self.gpu_history.push(self.gpu_power);
+        self.power_history.push(self.cpu_power + self.gpu_power);
     }
 
     fn snapshot(&self) -> UiSnapshot<'_> {
@@ -324,7 +321,6 @@ impl AppState {
                 } else {
                     0.0
                 },
-                tdp_limit: self.soc.cpu_max_power,
             },
             gpu_power: PowerSnapshot {
                 current: self.gpu_power,
@@ -335,17 +331,14 @@ impl AppState {
                 } else {
                     0.0
                 },
-                tdp_limit: self.soc.gpu_max_power,
             },
             package_power: PowerSnapshot {
                 current: self.package_power,
                 average: self.package_avg.average(),
                 peak: self.package_peak,
                 percent_of_tdp: 0.0,
-                tdp_limit: 0.0,
             },
-            cpu_history: self.cpu_history.values(),
-            gpu_history: self.gpu_history.values(),
+            power_history: self.power_history.values(),
         }
     }
 
