@@ -23,19 +23,24 @@
 
 ## 自行构建
 
-```
-cd asitop-rs
+```bash
+cd asitop_InRust
 cargo build --release
 ```
 
-可执行文件位于 `target/release/asitop`。
+可执行文件位于 `target/release/asitop_in_rust`。
+### 安装
+
+```bash
+cargo install --path .
+```
 
 ## 使用
 
 `powermetrics` 需要 `sudo` 才能读取硬件计数器，运行示例：
 
-```
-sudo target/release/asitop --interval 2 --avg 30 --color 2  --show-cores
+```bash
+sudo target/release/asitop_in_rust --interval 2 --avg 30 --color 2  --show-cores
 ```
 
 ### 参数

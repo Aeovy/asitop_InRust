@@ -28,18 +28,23 @@ Single-core view enabled with the `--show-cores` parameter:
 ## Build Instructions
 
 ```bash
-cd asitop-rs
+cd asitop_InRust
 cargo build --release
 ```
 
-The executable will be located at `target/release/asitop`.
+The executable will be located at `target/release/asitop_in_rust`.
+### Install
+
+```bash
+cargo install --path .
+```
 
 ## Usage
 
 `powermetrics` requires `sudo` to read hardware counters. Example usage:
 
 ```bash
-sudo target/release/asitop --interval 2 --avg 30 --color 2 --show-cores
+sudo target/release/asitop_in_rust --interval 2 --avg 30 --color 2 --show-cores
 ```
 
 ### Parameters
