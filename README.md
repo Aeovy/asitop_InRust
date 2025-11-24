@@ -1,6 +1,12 @@
 # asitop In Rust
+## [English Version](./Doc/README_EN.md)
 
-这是原 [asitop](https://github.com/tlkh/asitop) 的 Rust 重构版本。采用 Ratatui UI 构建UI，同时 Rust 版本修复了原 Python 版本存在的内存泄漏问题，并将长时间运行的内存占用降至4MB左右，约**原asitop短时运行的 10%**。详见原仓库 Issue [#80](https://github.com/tlkh/asitop/issues/80)。我曾在一个周末让原版 `asitop` 连续运行两天，内存泄漏最终导致 swap 写满了我的 512 GB 硬盘。
+这是原 [asitop](https://github.com/tlkh/asitop) 的 Rust 重构版本。采用 Ratatui UI 构建UI，同时 Rust 版本修复了原 Python 版本存在的内存泄漏问题(详见原仓库 Issue [#80](https://github.com/tlkh/asitop/issues/80))，并将长时间运行的内存占用降至4MB左右，约**原asitop短时运行的 25%**。
+## Rust版本内存占用，3.8MB
+![Rust版本内存占用](./IMG/MEMRUST.png)
+## Python版本内存占用 16.8MB
+![Python版本内存占用](./IMG/MEMPYTHON.png)
+我曾在一个周末连续运行两天原版 asitop，内存泄漏直接让 swap 写满了我的 512 GB 硬盘。
 ## 预览图
 
 ![默认视图](./IMG/IMG1.png)
@@ -13,6 +19,7 @@
 - 展示 CPU（集群 + 单核）、GPU、ANE 的块状占用条与功耗信息，支持滚动平均与峰值跟踪。
 - 提供内存、交换分区、当前功耗、平均功耗、峰值功耗、网络与磁盘 I/O 速率等系统状态概览。
 - 支持自定义刷新间隔、CPU&GPU功耗滚动平均窗口、配色方案，以及可选的单核视图与自动重启 `powermetrics`。
+- UI布局可根据终端窗口大小自适应
 
 ## 自行构建
 
@@ -28,7 +35,7 @@ cargo build --release
 `powermetrics` 需要 `sudo` 才能读取硬件计数器，运行示例：
 
 ```
-sudo target/release/asitop --interval 1 --avg 30 --color 2
+sudo target/release/asitop --interval 2 --avg 30 --color 2  --show-cores
 ```
 
 ### 参数
@@ -36,16 +43,20 @@ sudo target/release/asitop --interval 1 --avg 30 --color 2
 - `--interval <seconds>`：刷新频率，同时也是 `powermetrics` 的采样间隔。
 - `--avg <seconds>`：功耗读数的滚动平均窗口。
 - `--color <0-8>`：选择预设配色。
-        0 => Color::Reset,
-        1 => Color::Red,
-        2 => Color::Green,
-        3 => Color::Yellow,
-        4 => Color::Blue,
-        5 => Color::Magenta,
-        6 => Color::Cyan,
-        7 => Color::White,
-        8 => Color::LightMagenta,
-        _ => Color::Green,
+
+  | 值 | 配色    |
+  |----|--------|
+  |  0 | Black  |
+  |  1 | Red    |
+  |  2 | Green  |
+  |  3 | Yellow |
+  |  4 | Blue   |
+  |  5 | Magenta|
+  |  6 | Cyan   |
+  |  7 | White  |
+  |  8 | LightMagenta |
+
+  默认值：`Green`
 - `--show-cores`：开启单核视图。
 - `--max-count <n>`：采样达到 `n` 次后自动重启 `powermetrics`（0 表示永不重启）。
 默认参数:
