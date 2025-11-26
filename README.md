@@ -1,7 +1,8 @@
 # asitop In Rust
 ## [English Version](./Doc/README_EN.md)
-
 这是原 [asitop](https://github.com/tlkh/asitop) 的 Rust 重构版本。采用 Ratatui UI 构建UI，同时 Rust 版本修复了原 Python 版本存在的内存泄漏问题(详见原仓库 Issue [#80](https://github.com/tlkh/asitop/issues/80))，并将长时间运行的内存占用降至4MB左右，约**原asitop短时运行的 25%**。
+
+This is the Rust refactored version of the original [asitop](https://github.com/tlkh/asitop). Built with the Ratatui UI, the Rust version fixes the memory leak issue present in the original Python version (see Issue [#80](https://github.com/tlkh/asitop/issues/80) in the original repository) and reduces long-term memory usage to around 4MB, approximately **25% of the short-term memory usage of the original asitop**.
 ## Rust版本内存占用，3.8MB
 ![Rust版本内存占用](./IMG/MEMRUST.png)
 ## Python版本内存占用 16.8MB
