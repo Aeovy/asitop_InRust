@@ -14,6 +14,6 @@ clap = { version = "4.5.53", features = ["derive"] }
 crossterm = "0.29.0"
 libc = "0.2"
 plist = { version = "1.6", features = ["serde"] }
-ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
 serde = { version = "1.0", features = ["derive"] }
-core-foundation-sys = "0.8"
+core-foundation-sys = "0.8.7"

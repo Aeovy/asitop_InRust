@@ -55,7 +55,7 @@ pub fn draw(frame: &mut Frame<'_>, data: &UiSnapshot<'_>) {
             Constraint::Length(5),
             Constraint::Min(10),
         ])
-        .split(frame.size());
+        .split(frame.area());
 
     draw_processor(frame, chunks[0], data);
     draw_memory(frame, chunks[1], data);
@@ -74,7 +74,7 @@ fn draw_processor(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         .border_style(Style::default().fg(data.color));
     frame.render_widget(block, area);
 
-    let inner = area.inner(&Margin {
+    let inner = area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -174,14 +174,14 @@ fn draw_memory(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(data.color));
     frame.render_widget(block, area);
-    let inner = area.inner(&Margin {
+    let inner = area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
     let gauge = Gauge::default()
         .block(Block::default().title(ram_title))
         .gauge_style(Style::default().fg(data.color))
-        .percent(data.memory.free_percent as u16);
+        .percent(data.memory.used_percent as u16);
     frame.render_widget(gauge, inner);
 }
 
@@ -191,7 +191,7 @@ fn draw_io(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(data.color));
     frame.render_widget(block, area);
-    let inner = area.inner(&Margin {
+    let inner = area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -233,7 +233,7 @@ fn draw_power(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(data.color));
     frame.render_widget(block, area);
-    let inner = area.inner(&Margin {
+    let inner = area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -349,7 +349,7 @@ fn render_core_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(accent));
     frame.render_widget(block, area);
-    let inner = area.inner(&Margin {
+    let inner = area.inner(Margin {
         horizontal: 1,
         vertical: 1,
     });

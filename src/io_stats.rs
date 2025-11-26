@@ -84,27 +84,53 @@ fn rate_from_delta(current: u64, previous: u64, delta_secs: f64) -> f64 {
 }
 
 fn read_network_counters() -> Option<(u64, u64)> {
+    // SAFETY: We use getifaddrs/freeifaddrs correctly:
+    // 1. ifap is initialized to null before getifaddrs
+    // 2. We check both return value and null pointer
+    // 3. We always call freeifaddrs before returning
+    // 4. All pointer dereferences are guarded by null checks
     unsafe {
         let mut ifap: *mut ifaddrs = ptr::null_mut();
-        if getifaddrs(&mut ifap) != 0 || ifap.is_null() {
+        if getifaddrs(&mut ifap) != 0 {
             return None;
         }
+        if ifap.is_null() {
+            return None;
+        }
+        
         let mut total_in = 0u64;
         let mut total_out = 0u64;
         let mut cursor = ifap;
-        while !cursor.is_null() {
+        
+        // Limit iterations to prevent infinite loops from corrupted data
+        const MAX_INTERFACES: usize = 1000;
+        let mut iterations = 0;
+        
+        while !cursor.is_null() && iterations < MAX_INTERFACES {
+            iterations += 1;
             let iface = &*cursor;
-            if !iface.ifa_addr.is_null() && (*iface.ifa_addr).sa_family as i32 == AF_LINK {
-                let flags = iface.ifa_flags as i32;
-                if (flags & IFF_UP) != 0 && (flags & IFF_LOOPBACK) == 0 {
-                    if let Some(data) = (iface.ifa_data as *const if_data).as_ref() {
-                        total_in = total_in.saturating_add(data.ifi_ibytes as u64);
-                        total_out = total_out.saturating_add(data.ifi_obytes as u64);
+            
+            // Validate ifa_addr before dereferencing
+            if !iface.ifa_addr.is_null() {
+                let sa_family = (*iface.ifa_addr).sa_family as i32;
+                if sa_family == AF_LINK {
+                    let flags = iface.ifa_flags as i32;
+                    if (flags & IFF_UP) != 0 && (flags & IFF_LOOPBACK) == 0 {
+                        // Validate ifa_data pointer before use
+                        let data_ptr = iface.ifa_data as *const if_data;
+                        if !data_ptr.is_null() {
+                            // Use as_ref for safe optional dereference
+                            if let Some(data) = data_ptr.as_ref() {
+                                total_in = total_in.saturating_add(data.ifi_ibytes as u64);
+                                total_out = total_out.saturating_add(data.ifi_obytes as u64);
+                            }
+                        }
                     }
                 }
             }
             cursor = iface.ifa_next;
         }
+        
         freeifaddrs(ifap);
         Some((total_in, total_out))
     }

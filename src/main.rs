@@ -32,6 +32,51 @@ use std::{
 use thermal::{ThermalLevel, read_warning_level};
 use ui::{PowerSnapshot, UiSnapshot};
 
+/// RAII wrapper for powermetrics child process.
+/// Ensures the child process is killed and waited on when dropped,
+/// preventing orphan processes on panic or early return.
+struct PowermetricsGuard {
+    child: Option<Child>,
+}
+
+impl PowermetricsGuard {
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    /// Kill and restart the process with a new timecode
+    fn restart(&mut self, timecode: &str, interval_ms: u64) -> Result<()> {
+        // Kill existing process first
+        if let Some(ref mut child) = self.child {
+            child.kill().ok();
+            child.wait().ok();
+        }
+        // Start new process
+        self.child = Some(run_powermetrics(timecode, interval_ms)?);
+        Ok(())
+    }
+
+    /// Explicitly stop the child process
+    fn stop(&mut self) {
+        if let Some(ref mut child) = self.child {
+            child.kill().ok();
+            child.wait().ok();
+        }
+        self.child = None;
+    }
+}
+
+impl Drop for PowermetricsGuard {
+    fn drop(&mut self) {
+        // Ensure cleanup on panic or early return
+        if let Some(ref mut child) = self.child {
+            // Send SIGKILL and wait to reap the process
+            child.kill().ok();
+            child.wait().ok();
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     println!("\nASITOP - Performance monitoring CLI tool for Apple Silicon");
@@ -46,8 +91,10 @@ fn main() -> Result<()> {
 
     println!("[2/3] Starting powermetrics process\n");
     let mut timecode = new_timecode();
-    let mut child =
+    let child =
         run_powermetrics(&timecode, cli.interval * 1000).context("failed to spawn powermetrics")?;
+    // Wrap child in RAII guard to ensure cleanup on panic or early return
+    let mut guard = PowermetricsGuard::new(child);
     println!("[3/3] Waiting for first reading...\n");
 
     let first_reading = wait_for_reading(&timecode, Duration::from_millis(100))
@@ -59,11 +106,14 @@ fn main() -> Result<()> {
 
     let result = run_ui(
         &mut state,
-        &mut child,
+        &mut guard,
         &mut timecode,
         &mut memory_reader,
         &mut io_sampler,
     );
+
+    // Explicitly stop before terminal cleanup for clean shutdown
+    guard.stop();
 
     if let Err(err) = cleanup_terminal() {
         eprintln!("failed to restore terminal: {err}");
@@ -77,13 +127,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Wait for powermetrics to produce the first reading, with timeout
 fn wait_for_reading(timecode: &str, wait: Duration) -> Result<PowermetricsReading> {
-    loop {
+    const MAX_ATTEMPTS: u32 = 300; // Wait up to 30 seconds (300 * 100ms)
+    for attempt in 0..MAX_ATTEMPTS {
         if let Some(reading) = parse_powermetrics(timecode)? {
             return Ok(reading);
         }
+        if attempt % 50 == 49 {
+            eprintln!("Still waiting for powermetrics data... ({} seconds)", (attempt + 1) / 10);
+        }
         thread::sleep(wait);
     }
+    anyhow::bail!("Timeout waiting for powermetrics data ({}s)", MAX_ATTEMPTS as u64 * wait.as_millis() as u64 / 1000)
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
@@ -101,7 +157,7 @@ fn cleanup_terminal() -> Result<()> {
 
 fn run_ui(
     state: &mut AppState,
-    child: &mut Child,
+    guard: &mut PowermetricsGuard,
     timecode: &mut String,
     memory_reader: &mut MemoryReader,
     io_sampler: &mut IoSampler,
@@ -139,10 +195,8 @@ fn run_ui(
         }
 
         if state.config.max_count > 0 && state.samples_taken >= state.config.max_count {
-            child.kill().ok();
-            child.wait().ok();
             *timecode = new_timecode();
-            *child = run_powermetrics(timecode, state.config.interval * 1000)?;
+            guard.restart(timecode, state.config.interval * 1000)?;
             state.samples_taken = 0;
             state.last_timestamp = None;
         }
@@ -156,8 +210,6 @@ fn run_ui(
         }
     }
 
-    child.kill().ok();
-    child.wait().ok();
     terminal.show_cursor().ok();
     Ok(())
 }
@@ -282,7 +334,8 @@ impl AppState {
         self.gpu_power = self.cpu_metrics.gpu_w / interval;
         self.package_power = self.cpu_metrics.package_w / interval;
         self.ane_power = self.cpu_metrics.ane_w / interval;
-        self.ane_percent = ((self.ane_power / 8.0) * 100.0).clamp(0.0, 100.0).round() as u64;
+        let ane_max = self.soc.ane_max_power.max(1.0);
+        self.ane_percent = ((self.ane_power / ane_max) * 100.0).clamp(0.0, 100.0).round() as u64;
 
         self.cpu_peak = self.cpu_peak.max(self.cpu_power);
         self.gpu_peak = self.gpu_peak.max(self.gpu_power);

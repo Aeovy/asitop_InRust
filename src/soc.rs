@@ -8,6 +8,7 @@ pub struct SocInfo {
     pub gpu_core_count: u32,
     pub cpu_max_power: f64,
     pub gpu_max_power: f64,
+    pub ane_max_power: f64,
 }
 
 impl SocInfo {
@@ -21,7 +22,7 @@ impl SocInfo {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         let gpu_core_count = read_gpu_core_count().unwrap_or(0);
-        let (cpu_max_power, gpu_max_power) = lookup_caps(cpu_name.trim());
+        let (cpu_max_power, gpu_max_power, ane_max_power) = lookup_caps(cpu_name.trim());
 
         Self {
             name: cpu_name.trim().to_string(),
@@ -30,20 +31,24 @@ impl SocInfo {
             gpu_core_count,
             cpu_max_power,
             gpu_max_power,
+            ane_max_power,
         }
     }
 }
 
-fn lookup_caps(name: &str) -> (f64, f64) {
-    if name.ends_with("Pro") {
-        (40.0, 40.0)
+/// Lookup CPU, GPU and ANE TDP based on chip name
+/// Returns (cpu_max_power, gpu_max_power, ane_max_power) in watts
+fn lookup_caps(name: &str) -> (f64, f64, f64) {
+    if name.ends_with("Ultra") {
+        return (150.0, 150.0, 16.0);
     } else if name.ends_with("Max") {
-        (90.0, 90.0)
-    } else if name.ends_with("Ultra") {
-        (140.0, 140.0)
+        return (100.0, 100.0, 16.0);
+    } else if name.ends_with("Pro") {
+        return (45.0, 45.0, 8.0);
     } else {
-        (20.0, 20.0)
+        return (25.0, 25.0, 8.0);
     }
+
 }
 
 fn read_sysctl(key: &str) -> Option<String> {

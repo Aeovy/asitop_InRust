@@ -155,12 +155,39 @@ pub fn parse_powermetrics(timecode: &str) -> Result<Option<PowermetricsReading>>
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
+    
+    // Read from the end of the file to get the latest sample.
+    // We read up to MAX_READ_BYTES from EOF which is enough for one sample.
+    // Note: There's a small TOCTOU race between metadata() and read_to_end(),
+    // but this only affects read position, not safety. The worst case is
+    // reading slightly more or less data, which plist parsing handles gracefully.
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if len == 0 {
+        return Ok(None);
+    }
+    
     let start = len.saturating_sub(MAX_READ_BYTES);
-    file.seek(SeekFrom::Start(start)).ok();
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)
-        .with_context(|| "failed to read powermetrics chunk")?;
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        // If seek fails, try reading from the beginning
+        file.seek(SeekFrom::Start(0)).ok();
+    }
+    
+    // Pre-allocate buffer with expected capacity to reduce reallocations
+    let expected_size = len.saturating_sub(start) as usize;
+    let mut data = Vec::with_capacity(expected_size.min(MAX_READ_BYTES as usize));
+    
+    if let Err(e) = file.read_to_end(&mut data) {
+        // Log error but don't fail - file might still be written to
+        if data.is_empty() {
+            return Err(anyhow::anyhow!("failed to read powermetrics chunk: {}", e));
+        }
+        // Continue with partial data if we got something
+    }
+    
+    if data.is_empty() {
+        return Ok(None);
+    }
+    
     let chunks: Vec<&[u8]> = data
         .split(|b| *b == 0)
         .filter(|chunk| !chunk.is_empty())
@@ -293,10 +320,14 @@ fn cluster_stats(clusters: &[ClusterData], prefix: char) -> (Option<u64>, Option
         .iter()
         .filter(|c| c.name.starts_with(prefix))
         .collect();
-    if !matching.is_empty() {
+    
+    // Guard against division by zero - matching.len() is checked to be non-empty
+    let matching_len = matching.len();
+    if matching_len > 0 {
         let active_sum: u64 = matching.iter().map(|c| c.active_pct).sum();
         let freq_max = matching.iter().map(|c| c.freq_mhz).max().unwrap_or(0);
-        let active = (active_sum > 0).then_some(active_sum / matching.len() as u64);
+        // Safe division: matching_len is guaranteed > 0 here
+        let active = (active_sum > 0).then_some(active_sum / matching_len as u64);
         let freq = (freq_max > 0).then_some(freq_max);
         return (active, freq);
     }
@@ -349,6 +380,7 @@ pub struct RollingAverage {
     data: VecDeque<f64>,
     max_len: usize,
     sum: f64,
+    push_count: u32,
 }
 
 impl RollingAverage {
@@ -357,6 +389,7 @@ impl RollingAverage {
             data: VecDeque::with_capacity(max_len),
             max_len,
             sum: 0.0,
+            push_count: 0,
         }
     }
 
@@ -371,6 +404,13 @@ impl RollingAverage {
         }
         self.sum += value;
         self.data.push_back(value);
+        self.push_count += 1;
+
+        // Recalculate sum periodically to avoid floating point drift
+        if self.push_count >= 1000 {
+            self.sum = self.data.iter().sum();
+            self.push_count = 0;
+        }
     }
 
     pub fn average(&self) -> f64 {

@@ -8,7 +8,8 @@ use std::{mem, ptr};
 pub struct MemoryStats {
     pub total_gb: f64,
     pub used_gb: f64,
-    pub free_percent: u64,
+    /// Percentage of memory currently in use (0-100)
+    pub used_percent: u64,
     pub swap_total_gb: f64,
     pub swap_used_gb: f64,
 }
@@ -87,7 +88,7 @@ impl MemoryReader {
         MemoryStats {
             total_gb: bytes_to_gb(total),
             used_gb: bytes_to_gb(used),
-            free_percent: used_percent as u64,
+            used_percent: used_percent as u64,
             swap_total_gb: bytes_to_gb(swap_total),
             swap_used_gb: bytes_to_gb(swap_used),
         }
