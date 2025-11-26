@@ -79,9 +79,9 @@ impl Drop for PowermetricsGuard {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    println!("\nASITOP - Performance monitoring CLI tool for Apple Silicon");
-    println!("Get help at https://github.com/tlkh/asitop");
-    println!("You are recommended to run this program via `sudo asitop`\n");
+    println!("\nASITOP_IN_RUST - An improved and refactored version of ASITOP, a performance monitoring CLI tool for Apple Silicon");
+    println!("Original ASITOP https://github.com/tlkh/asitop");
+    println!("Get help at https://github.com/Aeovy/asitop_InRust\n");
     println!("[1/3] Detecting SoC and preparing powermetrics\n");
 
     let soc = SocInfo::detect();
