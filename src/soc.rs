@@ -6,9 +6,9 @@ pub struct SocInfo {
     pub e_core_count: u32,
     pub p_core_count: u32,
     pub gpu_core_count: u32,
-    pub cpu_max_power: f64,
-    pub gpu_max_power: f64,
-    pub ane_max_power: f64,
+    pub cpu_max_power: f32,
+    pub gpu_max_power: f32,
+    pub ane_max_power: f32,
 }
 
 impl SocInfo {
@@ -38,7 +38,7 @@ impl SocInfo {
 
 /// Lookup CPU, GPU and ANE TDP based on chip name
 /// Returns (cpu_max_power, gpu_max_power, ane_max_power) in watts
-fn lookup_caps(name: &str) -> (f64, f64, f64) {
+fn lookup_caps(name: &str) -> (f32, f32, f32) {
     if name.ends_with("Ultra") {
         return (150.0, 150.0, 16.0);
     } else if name.ends_with("Max") {

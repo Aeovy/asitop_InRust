@@ -8,14 +8,16 @@ use libc::{
     self, AF_LINK, IFF_LOOPBACK, IFF_UP, KERN_SUCCESS, c_char, c_void, freeifaddrs, getifaddrs,
     if_data, ifaddrs, mach_port_t,
 };
-use std::{ffi::CString, ptr, time::Instant};
+use std::{ffi::CString, ptr, time::{Duration, Instant}};
+
+const MIN_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IoStats {
-    pub net_in_mbps: f64,
-    pub net_out_mbps: f64,
-    pub disk_read_mbps: f64,
-    pub disk_write_mbps: f64,
+    pub net_in_mbps: f32,
+    pub net_out_mbps: f32,
+    pub disk_read_mbps: f32,
+    pub disk_write_mbps: f32,
 }
 
 pub struct IoSampler {
@@ -37,6 +39,14 @@ impl IoSampler {
 
     pub fn sample(&mut self) -> IoStats {
         let now = Instant::now();
+
+        // Skip sampling if not enough time has passed
+        if let Some(last) = self.last_instant {
+            if now.duration_since(last) < MIN_SAMPLE_INTERVAL {
+                return self.current;
+            }
+        }
+
         let net_totals = read_network_counters();
         let disk_totals = read_disk_counters();
 
@@ -74,12 +84,12 @@ impl IoSampler {
     }
 }
 
-fn rate_from_delta(current: u64, previous: u64, delta_secs: f64) -> f64 {
+fn rate_from_delta(current: u64, previous: u64, delta_secs: f64) -> f32 {
     if current <= previous || delta_secs <= 0.0 {
         0.0
     } else {
         let diff = current - previous;
-        diff as f64 / delta_secs / (1024.0 * 1024.0)
+        (diff as f64 / delta_secs / (1024.0 * 1024.0)) as f32
     }
 }
 

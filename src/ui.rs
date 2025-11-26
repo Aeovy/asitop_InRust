@@ -28,22 +28,22 @@ pub struct UiSnapshot<'a> {
     pub color: Color,
     pub show_cores: bool,
     pub ane_percent: u64,
-    pub ane_power_w: f64,
+    pub ane_power_w: f32,
     pub ram_has_swap: bool,
-    pub swap_used_gb: f64,
-    pub swap_total_gb: f64,
+    pub swap_used_gb: f32,
+    pub swap_total_gb: f32,
     pub cpu_power: PowerSnapshot,
     pub gpu_power: PowerSnapshot,
     pub package_power: PowerSnapshot,
-    pub power_history: Vec<f64>,
+    pub power_history: Vec<f32>,
 }
 
 #[derive(Clone, Copy)]
 pub struct PowerSnapshot {
-    pub current: f64,
-    pub average: f64,
-    pub peak: f64,
-    pub percent_of_tdp: f64,
+    pub current: f32,
+    pub average: f32,
+    pub peak: f32,
+    pub percent_of_tdp: f32,
 }
 
 pub fn draw(frame: &mut Frame<'_>, data: &UiSnapshot<'_>) {
@@ -300,7 +300,7 @@ fn render_power_history(frame: &mut Frame<'_>, area: Rect, data: &UiSnapshot<'_>
     frame.render_widget(spark, area);
 }
 
-fn combined_history_values(history: &[f64], peak_limit: f64) -> Vec<u64> {
+fn combined_history_values(history: &[f32], peak_limit: f32) -> Vec<u64> {
     history
         .iter()
         .map(|value| {
@@ -540,7 +540,7 @@ fn render_io_panel(
     frame.render_widget(paragraph, area);
 }
 
-fn format_rate(mbps: f64) -> String {
+fn format_rate(mbps: f32) -> String {
     let value = mbps.max(0.0);
     if value >= 1024.0 {
         format!("{:.2} GB/s", value / 1024.0)

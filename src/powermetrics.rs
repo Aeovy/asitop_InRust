@@ -28,10 +28,10 @@ pub struct CpuMetrics {
     pub p_cluster_freq_mhz: u64,
     pub e_cores: Vec<CoreMetrics>,
     pub p_cores: Vec<CoreMetrics>,
-    pub cpu_w: f64,
-    pub gpu_w: f64,
-    pub ane_w: f64,
-    pub package_w: f64,
+    pub cpu_w: f32,
+    pub gpu_w: f32,
+    pub ane_w: f32,
+    pub package_w: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,55 +149,67 @@ pub fn new_timecode() -> String {
     now.to_string()
 }
 
-pub fn parse_powermetrics(timecode: &str) -> Result<Option<PowermetricsReading>> {
-    let path = powermetrics_path(timecode);
-    let mut file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
-    };
-    
-    // Read from the end of the file to get the latest sample.
-    // We read up to MAX_READ_BYTES from EOF which is enough for one sample.
-    // Note: There's a small TOCTOU race between metadata() and read_to_end(),
-    // but this only affects read position, not safety. The worst case is
-    // reading slightly more or less data, which plist parsing handles gracefully.
-    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if len == 0 {
-        return Ok(None);
-    }
-    
-    let start = len.saturating_sub(MAX_READ_BYTES);
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        // If seek fails, try reading from the beginning
-        file.seek(SeekFrom::Start(0)).ok();
-    }
-    
-    // Pre-allocate buffer with expected capacity to reduce reallocations
-    let expected_size = len.saturating_sub(start) as usize;
-    let mut data = Vec::with_capacity(expected_size.min(MAX_READ_BYTES as usize));
-    
-    if let Err(e) = file.read_to_end(&mut data) {
-        // Log error but don't fail - file might still be written to
-        if data.is_empty() {
-            return Err(anyhow::anyhow!("failed to read powermetrics chunk: {}", e));
-        }
-        // Continue with partial data if we got something
-    }
-    
-    if data.is_empty() {
-        return Ok(None);
-    }
-    
-    let chunks: Vec<&[u8]> = data
-        .split(|b| *b == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .collect();
-    for chunk in chunks.iter().rev() {
-        if let Ok(snapshot) = plist::from_reader::<_, RawSnapshot>(Cursor::new(chunk)) {
-            return Ok(Some(convert_snapshot(snapshot)));
+/// Cached reader for powermetrics file to reduce unnecessary I/O
+pub struct PowermetricsReader {
+    path: String,
+    last_len: u64,
+    buffer: Vec<u8>,
+}
+
+impl PowermetricsReader {
+    pub fn new(timecode: &str) -> Self {
+        Self {
+            path: powermetrics_path(timecode),
+            last_len: 0,
+            buffer: Vec::with_capacity(MAX_READ_BYTES as usize),
         }
     }
-    Ok(None)
+
+    pub fn set_timecode(&mut self, timecode: &str) {
+        self.path = powermetrics_path(timecode);
+        self.last_len = 0;
+    }
+
+    pub fn parse(&mut self) -> Result<Option<PowermetricsReading>> {
+        let mut file = match File::open(&self.path) {
+            Ok(f) => f,
+            Err(_) => return Ok(None),
+        };
+
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        if len == 0 {
+            return Ok(None);
+        }
+
+        // Skip if file size hasn't changed
+        if len == self.last_len {
+            return Ok(None);
+        }
+        self.last_len = len;
+
+        let start = len.saturating_sub(MAX_READ_BYTES);
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            file.seek(SeekFrom::Start(0)).ok();
+        }
+
+        self.buffer.clear();
+        if let Err(e) = file.read_to_end(&mut self.buffer) {
+            if self.buffer.is_empty() {
+                return Err(anyhow::anyhow!("failed to read powermetrics chunk: {}", e));
+            }
+        }
+
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
+
+        for chunk in self.buffer.split(|b| *b == 0).rev().filter(|c| !c.is_empty()) {
+            if let Ok(snapshot) = plist::from_reader::<_, RawSnapshot>(Cursor::new(chunk)) {
+                return Ok(Some(convert_snapshot(snapshot)));
+            }
+        }
+        Ok(None)
+    }
 }
 
 fn convert_snapshot(raw: RawSnapshot) -> PowermetricsReading {
@@ -257,10 +269,10 @@ fn convert_snapshot(raw: RawSnapshot) -> PowermetricsReading {
             p_cluster_freq_mhz: p_cluster_freq,
             e_cores,
             p_cores,
-            cpu_w: raw.processor.cpu_energy / 1000.0,
-            gpu_w: raw.processor.gpu_energy / 1000.0,
-            ane_w: raw.processor.ane_energy / 1000.0,
-            package_w: raw.processor.combined_power / 1000.0,
+            cpu_w: (raw.processor.cpu_energy / 1000.0) as f32,
+            gpu_w: (raw.processor.gpu_energy / 1000.0) as f32,
+            ane_w: (raw.processor.ane_energy / 1000.0) as f32,
+            package_w: (raw.processor.combined_power / 1000.0) as f32,
         },
         gpu: GpuMetrics {
             active_pct: ratio_to_pct(raw.gpu.idle_ratio),
@@ -351,7 +363,7 @@ fn core_max_freq(cores: &[CoreMetrics]) -> u64 {
 /// Helper storing datapoints for sparkline-style history charts.
 #[derive(Default)]
 pub struct History {
-    data: VecDeque<f64>,
+    data: VecDeque<f32>,
     max_len: usize,
 }
 
@@ -363,23 +375,23 @@ impl History {
         }
     }
 
-    pub fn push(&mut self, value: f64) {
+    pub fn push(&mut self, value: f32) {
         if self.data.len() == self.max_len {
             self.data.pop_front();
         }
         self.data.push_back(value);
     }
 
-    pub fn values(&self) -> Vec<f64> {
+    pub fn values(&self) -> Vec<f32> {
         self.data.iter().copied().collect()
     }
 }
 
 #[derive(Default)]
 pub struct RollingAverage {
-    data: VecDeque<f64>,
+    data: VecDeque<f32>,
     max_len: usize,
-    sum: f64,
+    sum: f32,
     push_count: u32,
 }
 
@@ -393,7 +405,7 @@ impl RollingAverage {
         }
     }
 
-    pub fn push(&mut self, value: f64) {
+    pub fn push(&mut self, value: f32) {
         if self.max_len == 0 {
             return;
         }
@@ -413,11 +425,11 @@ impl RollingAverage {
         }
     }
 
-    pub fn average(&self) -> f64 {
+    pub fn average(&self) -> f32 {
         if self.data.is_empty() {
             0.0
         } else {
-            self.sum / self.data.len() as f64
+            self.sum / self.data.len() as f32
         }
     }
 }

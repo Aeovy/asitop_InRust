@@ -18,8 +18,8 @@ use crossterm::{
 use io_stats::{IoSampler, IoStats};
 use memory::{MemoryReader, MemoryStats};
 use powermetrics::{
-    CpuMetrics, GpuMetrics, History, PowermetricsReading, RollingAverage,
-    cleanup_powermetrics_files, new_timecode, parse_powermetrics, run_powermetrics,
+    CpuMetrics, GpuMetrics, History, PowermetricsReader, PowermetricsReading, RollingAverage,
+    cleanup_powermetrics_files, new_timecode, run_powermetrics,
 };
 use ratatui::{Terminal, backend::CrosstermBackend, prelude::*};
 use soc::SocInfo;
@@ -95,9 +95,10 @@ fn main() -> Result<()> {
         run_powermetrics(&timecode, cli.interval * 1000).context("failed to spawn powermetrics")?;
     // Wrap child in RAII guard to ensure cleanup on panic or early return
     let mut guard = PowermetricsGuard::new(child);
+    let mut pm_reader = PowermetricsReader::new(&timecode);
     println!("[3/3] Waiting for first reading...\n");
 
-    let first_reading = wait_for_reading(&timecode, Duration::from_millis(100))
+    let first_reading = wait_for_reading(&mut pm_reader, Duration::from_millis(100))
         .context("powermetrics never produced a reading")?;
 
     let mut state = AppState::new(cli.clone(), soc, &mut memory_reader);
@@ -108,6 +109,7 @@ fn main() -> Result<()> {
         &mut state,
         &mut guard,
         &mut timecode,
+        &mut pm_reader,
         &mut memory_reader,
         &mut io_sampler,
     );
@@ -128,10 +130,10 @@ fn main() -> Result<()> {
 }
 
 /// Wait for powermetrics to produce the first reading, with timeout
-fn wait_for_reading(timecode: &str, wait: Duration) -> Result<PowermetricsReading> {
+fn wait_for_reading(reader: &mut PowermetricsReader, wait: Duration) -> Result<PowermetricsReading> {
     const MAX_ATTEMPTS: u32 = 300; // Wait up to 30 seconds (300 * 100ms)
     for attempt in 0..MAX_ATTEMPTS {
-        if let Some(reading) = parse_powermetrics(timecode)? {
+        if let Some(reading) = reader.parse()? {
             return Ok(reading);
         }
         if attempt % 50 == 49 {
@@ -159,19 +161,15 @@ fn run_ui(
     state: &mut AppState,
     guard: &mut PowermetricsGuard,
     timecode: &mut String,
+    pm_reader: &mut PowermetricsReader,
     memory_reader: &mut MemoryReader,
     io_sampler: &mut IoSampler,
 ) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let mut last_draw = Instant::now();
     let mut last_sample = Instant::now();
     let poll_rate = Duration::from_millis(100);
     let mut running = true;
-
-    terminal.draw(|f| {
-        let snapshot = state.snapshot();
-        ui::draw(f, &snapshot);
-    })?;
+    let mut needs_redraw = true;
 
     while running {
         if event::poll(poll_rate)? {
@@ -187,9 +185,10 @@ fn run_ui(
         }
 
         if last_sample.elapsed() >= Duration::from_millis(100) {
-            if let Some(reading) = parse_powermetrics(timecode)? {
+            if let Some(reading) = pm_reader.parse()? {
                 if state.update_if_new(reading, memory_reader, io_sampler) {
                     last_sample = Instant::now();
+                    needs_redraw = true;
                 }
             }
         }
@@ -197,16 +196,17 @@ fn run_ui(
         if state.config.max_count > 0 && state.samples_taken >= state.config.max_count {
             *timecode = new_timecode();
             guard.restart(timecode, state.config.interval * 1000)?;
+            pm_reader.set_timecode(timecode);
             state.samples_taken = 0;
             state.last_timestamp = None;
         }
 
-        if last_draw.elapsed() >= Duration::from_millis(100) {
+        if needs_redraw {
             terminal.draw(|f| {
                 let snapshot = state.snapshot();
                 ui::draw(f, &snapshot);
             })?;
-            last_draw = Instant::now();
+            needs_redraw = false;
         }
     }
 
@@ -244,14 +244,14 @@ struct AppState {
     cpu_avg: RollingAverage,
     gpu_avg: RollingAverage,
     package_avg: RollingAverage,
-    cpu_peak: f64,
-    gpu_peak: f64,
-    package_peak: f64,
-    cpu_power: f64,
-    gpu_power: f64,
-    package_power: f64,
+    cpu_peak: f32,
+    gpu_peak: f32,
+    package_peak: f32,
+    cpu_power: f32,
+    gpu_power: f32,
+    package_power: f32,
     ane_percent: u64,
-    ane_power: f64,
+    ane_power: f32,
     pub samples_taken: u64,
 }
 
@@ -260,7 +260,7 @@ impl AppState {
         let interval_seconds = std::cmp::max(cli.interval, 1);
         let avg_window = std::cmp::max(1, (cli.avg / interval_seconds) as usize);
         let mut memory_stats = memory_reader.read();
-        if (memory_stats.total_gb - memory_stats.used_gb).abs() < f64::EPSILON {
+        if (memory_stats.total_gb - memory_stats.used_gb).abs() < f32::EPSILON {
             memory_stats.used_gb = memory_stats.total_gb;
         }
         Self {
@@ -329,7 +329,7 @@ impl AppState {
     }
 
     fn update_power_stats(&mut self) {
-        let interval = std::cmp::max(self.config.interval, 1) as f64;
+        let interval = std::cmp::max(self.config.interval, 1) as f32;
         self.cpu_power = self.cpu_metrics.cpu_w / interval;
         self.gpu_power = self.cpu_metrics.gpu_w / interval;
         self.package_power = self.cpu_metrics.package_w / interval;

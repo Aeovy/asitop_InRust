@@ -2,22 +2,26 @@ use libc::{
     self, HOST_VM_INFO64, HOST_VM_INFO64_COUNT, KERN_SUCCESS, c_int, c_void, host_statistics64,
     integer_t, mach_msg_type_number_t, mach_port_t, vm_statistics64,
 };
-use std::{mem, ptr};
+use std::{mem, ptr, time::{Duration, Instant}};
+
+const SWAP_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
-    pub total_gb: f64,
-    pub used_gb: f64,
+    pub total_gb: f32,
+    pub used_gb: f32,
     /// Percentage of memory currently in use (0-100)
     pub used_percent: u64,
-    pub swap_total_gb: f64,
-    pub swap_used_gb: f64,
+    pub swap_total_gb: f32,
+    pub swap_used_gb: f32,
 }
 
 pub struct MemoryReader {
     host_port: mach_port_t,
     page_size: u64,
     total_bytes: u64,
+    cached_swap: (u64, u64),
+    last_swap_update: Option<Instant>,
 }
 
 impl MemoryReader {
@@ -34,6 +38,8 @@ impl MemoryReader {
                 4096
             },
             total_bytes,
+            cached_swap: (0, 0),
+            last_swap_update: None,
         }
     }
 
@@ -83,14 +89,23 @@ impl MemoryReader {
         } else {
             0.0
         };
-        let (swap_total, swap_used) = read_swap_usage();
+
+        // Update swap info only periodically
+        let now = Instant::now();
+        let should_update_swap = self.last_swap_update
+            .map(|last| now.duration_since(last) >= SWAP_UPDATE_INTERVAL)
+            .unwrap_or(true);
+        if should_update_swap {
+            self.cached_swap = read_swap_usage();
+            self.last_swap_update = Some(now);
+        }
 
         MemoryStats {
             total_gb: bytes_to_gb(total),
             used_gb: bytes_to_gb(used),
             used_percent: used_percent as u64,
-            swap_total_gb: bytes_to_gb(swap_total),
-            swap_used_gb: bytes_to_gb(swap_used),
+            swap_total_gb: bytes_to_gb(self.cached_swap.0),
+            swap_used_gb: bytes_to_gb(self.cached_swap.1),
         }
     }
 }
@@ -145,8 +160,8 @@ fn read_total_memory() -> Option<u64> {
     if result == 0 { Some(value) } else { None }
 }
 
-fn bytes_to_gb(bytes: u64) -> f64 {
-    (bytes as f64) / (1024.0 * 1024.0 * 1024.0)
+fn bytes_to_gb(bytes: u64) -> f32 {
+    (bytes as f32) / (1024.0 * 1024.0 * 1024.0)
 }
 
 unsafe extern "C" {
