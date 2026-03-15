@@ -3,13 +3,12 @@ use plist::{self, Date};
 use serde::Deserialize;
 use std::{
     collections::VecDeque,
-    fs::{self, File},
-    io::{Cursor, Read, Seek, SeekFrom},
+    fs::{self},
+    io::{Cursor, Read,},
     process::{Child, Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{SystemTime},
 };
 
-const POWER_FILE_PREFIX: &str = "/tmp/asitop_powermetrics";
 const MAX_READ_BYTES: u64 = 1 * 1024 * 1024; // 1 MiB from EOF is enough for one sample
 
 #[derive(Debug, Clone)]
@@ -98,13 +97,9 @@ struct RawGpu {
     idle_ratio: f64,
 }
 
-pub fn powermetrics_path(timecode: &str) -> String {
-    format!("{POWER_FILE_PREFIX}{timecode}")
-}
 
-pub fn run_powermetrics(timecode: &str, interval_ms: u64) -> Result<Child> {
+pub fn run_powermetrics(interval_ms: u64) -> Result<Child> {
     cleanup_powermetrics_files().ok();
-    let path = powermetrics_path(timecode);
     let interval_arg = interval_ms.to_string();
     let mut cmd = Command::new("sudo");
     cmd.args([
@@ -114,15 +109,13 @@ pub fn run_powermetrics(timecode: &str, interval_ms: u64) -> Result<Child> {
         "powermetrics",
         "--samplers",
         "cpu_power,gpu_power,thermal",
-        "-o",
-        &path,
         "-f",
         "plist",
         "-i",
         &interval_arg,
     ])
     .stdin(Stdio::null())
-    .stdout(Stdio::null())
+    .stdout(Stdio::piped())
     .stderr(Stdio::null());
 
     cmd.spawn().with_context(|| "failed to spawn powermetrics")
@@ -142,70 +135,56 @@ pub fn cleanup_powermetrics_files() -> Result<()> {
     Ok(())
 }
 
-pub fn new_timecode() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    now.to_string()
-}
-
-/// Cached reader for powermetrics file to reduce unnecessary I/O
+/// Cached reader for powermetrics stream to reduce unnecessary I/O
 pub struct PowermetricsReader {
-    path: String,
-    last_len: u64,
+    reader: Box<dyn Read + Send>,
     buffer: Vec<u8>,
 }
 
 impl PowermetricsReader {
-    pub fn new(timecode: &str) -> Self {
+    /// Create a new reader from a stdout stream
+    pub fn from_stdout(stdout: std::process::ChildStdout) -> Self {
         Self {
-            path: powermetrics_path(timecode),
-            last_len: 0,
+            reader: Box::new(stdout) as Box<dyn Read + Send>,
             buffer: Vec::with_capacity(MAX_READ_BYTES as usize),
         }
     }
 
-    pub fn set_timecode(&mut self, timecode: &str) {
-        self.path = powermetrics_path(timecode);
-        self.last_len = 0;
-    }
-
     pub fn parse(&mut self) -> Result<Option<PowermetricsReading>> {
-        let mut file = match File::open(&self.path) {
-            Ok(f) => f,
+        // Stream-based reading (pipe mode)
+        let reader = self.reader.as_mut();
+
+        // Read new data into buffer
+        let mut temp_buf = [0u8; 8192];
+        let bytes_read = match reader.read(&mut temp_buf) {
+            Ok(n) => n,
             Err(_) => return Ok(None),
         };
 
-        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        if len == 0 {
+        if bytes_read == 0 {
             return Ok(None);
         }
 
-        // Skip if file size hasn't changed
-        if len == self.last_len {
-            return Ok(None);
-        }
-        self.last_len = len;
-
-        let start = len.saturating_sub(MAX_READ_BYTES);
-        if file.seek(SeekFrom::Start(start)).is_err() {
-            file.seek(SeekFrom::Start(0)).ok();
-        }
-
-        self.buffer.clear();
-        if let Err(e) = file.read_to_end(&mut self.buffer) {
-            if self.buffer.is_empty() {
-                return Err(anyhow::anyhow!("failed to read powermetrics chunk: {}", e));
-            }
-        }
+        self.buffer.extend_from_slice(&temp_buf[..bytes_read]);
 
         if self.buffer.is_empty() {
             return Ok(None);
         }
 
-        for chunk in self.buffer.split(|b| *b == 0).rev().filter(|c| !c.is_empty()) {
+        // Parse from the stream, looking for complete plist records
+        // We split by null bytes and try to parse each chunk
+        for chunk in self
+            .buffer
+            .split(|b| *b == 0)
+            .rev()
+            .filter(|c| !c.is_empty())
+        {
             if let Ok(snapshot) = plist::from_reader::<_, RawSnapshot>(Cursor::new(chunk)) {
+                // Keep only the latest complete record in buffer
+                // Find the position of this chunk in the buffer
+                if let Some(pos) = self.buffer.windows(chunk.len()).position(|w| w == chunk) {
+                    self.buffer = self.buffer[pos..].to_vec();
+                }
                 return Ok(Some(convert_snapshot(snapshot)));
             }
         }

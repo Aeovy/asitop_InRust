@@ -19,7 +19,7 @@ use io_stats::{IoSampler, IoStats};
 use memory::{MemoryReader, MemoryStats};
 use powermetrics::{
     CpuMetrics, GpuMetrics, History, PowermetricsReader, PowermetricsReading, RollingAverage,
-    cleanup_powermetrics_files, new_timecode, run_powermetrics,
+    cleanup_powermetrics_files, run_powermetrics,
 };
 use ratatui::{Terminal, backend::CrosstermBackend, prelude::*};
 use soc::SocInfo;
@@ -42,18 +42,6 @@ struct PowermetricsGuard {
 impl PowermetricsGuard {
     fn new(child: Child) -> Self {
         Self { child: Some(child) }
-    }
-
-    /// Kill and restart the process with a new timecode
-    fn restart(&mut self, timecode: &str, interval_ms: u64) -> Result<()> {
-        // Kill existing process first
-        if let Some(ref mut child) = self.child {
-            child.kill().ok();
-            child.wait().ok();
-        }
-        // Start new process
-        self.child = Some(run_powermetrics(timecode, interval_ms)?);
-        Ok(())
     }
 
     /// Explicitly stop the child process
@@ -90,12 +78,14 @@ fn main() -> Result<()> {
     cleanup_powermetrics_files().ok();
 
     println!("[2/3] Starting powermetrics process\n");
-    let mut timecode = new_timecode();
-    let child =
-        run_powermetrics(&timecode, cli.interval * 1000).context("failed to spawn powermetrics")?;
+    let mut child =
+        run_powermetrics(cli.interval * 1000).context("failed to spawn powermetrics")?;
+    // Extract stdout to create reader
+    let child_stdout = child.stdout.take().expect("failed to get stdout");
     // Wrap child in RAII guard to ensure cleanup on panic or early return
     let mut guard = PowermetricsGuard::new(child);
-    let mut pm_reader = PowermetricsReader::new(&timecode);
+    // Create reader from child's stdout stream
+    let mut pm_reader = PowermetricsReader::from_stdout(child_stdout);
     println!("[3/3] Waiting for first reading...\n");
 
     let first_reading = wait_for_reading(&mut pm_reader, Duration::from_millis(100))
@@ -107,8 +97,6 @@ fn main() -> Result<()> {
 
     let result = run_ui(
         &mut state,
-        &mut guard,
-        &mut timecode,
         &mut pm_reader,
         &mut memory_reader,
         &mut io_sampler,
@@ -159,8 +147,6 @@ fn cleanup_terminal() -> Result<()> {
 
 fn run_ui(
     state: &mut AppState,
-    guard: &mut PowermetricsGuard,
-    timecode: &mut String,
     pm_reader: &mut PowermetricsReader,
     memory_reader: &mut MemoryReader,
     io_sampler: &mut IoSampler,
@@ -191,14 +177,6 @@ fn run_ui(
                     needs_redraw = true;
                 }
             }
-        }
-
-        if state.config.max_count > 0 && state.samples_taken >= state.config.max_count {
-            *timecode = new_timecode();
-            guard.restart(timecode, state.config.interval * 1000)?;
-            pm_reader.set_timecode(timecode);
-            state.samples_taken = 0;
-            state.last_timestamp = None;
         }
 
         if needs_redraw {

@@ -25,6 +25,6 @@ pub struct Cli {
     pub show_cores: bool,
 
     /// Restart powermetrics after this many samples (0 = never restart).
-    #[arg(long, default_value_t = 0, value_name = "COUNT")]
+    #[arg(long, default_value_t = 0, value_name = "COUNT(Deprecated)")]
     pub max_count: u64,
 }
